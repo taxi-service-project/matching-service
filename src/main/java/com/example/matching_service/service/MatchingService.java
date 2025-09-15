@@ -10,14 +10,14 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.time.LocalDateTime;
-import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -58,30 +58,41 @@ public class MatchingService {
                 );
     }
 
-    private Flux<DriverCandidate> findBestDriver(MatchRequest request) {
+    private Mono<DriverCandidate> findBestDriver(MatchRequest request) {
         return locationServiceClient.findNearbyDrivers(
                                             request.origin().longitude(), request.origin().latitude(), 5)
-                                    .filterWhen(this::isDriverAvailable) // ❗️ this::isDriverAvailable로 변경
+                                    .filterWhen(this::isDriverAvailable)
                                     .collectList()
-                                    .flatMapMany(nearbyDrivers -> {
-                                        if (nearbyDrivers.isEmpty()) return Flux.empty();
+                                    .flatMap(nearbyDrivers -> {
+                                        if (nearbyDrivers.isEmpty()) {
+                                            return Mono.empty();
+                                        }
+
+                                        // 1. 빠른 조회를 위해 List를 Map으로 변환 (조회 성능 O(N) -> O(1))
+                                        Map<Long, Double> distanceMap = nearbyDrivers.stream()
+                                                                                     .collect(Collectors.toMap(
+                                                                                             LocationServiceClient.NearbyDriver::driverId,
+                                                                                             LocationServiceClient.NearbyDriver::distance
+                                                                                     ));
+
                                         List<Long> driverIds = nearbyDrivers.stream().map(LocationServiceClient.NearbyDriver::driverId).toList();
+
+                                        // 2. 기사 상세 정보 조회 후, 최고점 후보 1명만 찾는 reduce 사용
                                         return driverServiceClient.getDriversInfo(driverIds)
                                                                   .map(driverInfo -> {
-                                                                      double distance = nearbyDrivers.stream()
-                                                                                                     .filter(d -> d.driverId().equals(driverInfo.id()))
-                                                                                                     .findFirst()
-                                                                                                     .map(LocationServiceClient.NearbyDriver::distance)
-                                                                                                     .orElse(Double.MAX_VALUE);
+                                                                      double distance = distanceMap.getOrDefault(driverInfo.id(), Double.MAX_VALUE);
                                                                       return new DriverCandidate(driverInfo.id(), distance, driverInfo.ratingAvg());
-                                                                  });
-                                    })
-                                    .sort(Comparator.comparingDouble((DriverCandidate candidate) -> calculateScore(candidate.distance(), candidate.ratingAvg())).reversed())
-                                    .take(1);
+                                                                  })
+                                                                  // 3. 전체 정렬 대신, 최고점 후보만 갱신하며 최종 1명을 찾음 (메모리 효율적)
+                                                                  .reduce((candidate1, candidate2) ->
+                                                                          calculateScore(candidate1.distance, candidate1.ratingAvg) >
+                                                                                  calculateScore(candidate2.distance, candidate2.ratingAvg)
+                                                                                  ? candidate1 : candidate2
+                                                                  );
+                                    });
     }
 
     private Mono<Boolean> isDriverAvailable(LocationServiceClient.NearbyDriver driver) {
-        // blocking I/O 작업을 별도 스레드에서 실행하도록 하여 메인 스레드를 막지 않음
         return Mono.fromCallable(() -> {
             String key = "driver_status:" + driver.driverId();
             String value = (String) redisTemplate.opsForHash().get(key, "isAvailable");
@@ -89,8 +100,11 @@ public class MatchingService {
         }).subscribeOn(Schedulers.boundedElastic());
     }
 
-    private double calculateScore(double distance, double rating) {
-        if (distance == 0) return rating * 10; // 0으로 나누는 경우 방지
-        return (1.0 / distance) * 100 + (rating * 10);
+    private double calculateScore(double distanceKm, double rating) {
+        final double MIN_DISTANCE_KM = 0.01;
+
+        double effectiveDistance = Math.max(distanceKm, MIN_DISTANCE_KM);
+
+        return (1.0 / effectiveDistance) * 100 + (rating * 10);
     }
 }

@@ -12,6 +12,27 @@ spring:
   h2:
     console:
       enabled: true
+  data:
+    redis:
+      host: localhost
+      port: 6379
+  kafka:
+    bootstrap-servers: 192.168.1.100:9092
+    producer:
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      properties:
+        linger.ms: 5
+        batch.size: 30000
+        buffer.memory: 30000000
+    consumer:
+      group-id: matching-service-group
+      auto-offset-reset: earliest
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      properties:
+        # 4. JsonDeserializer가 모든 패키지의 객체를 변환할 수 있도록 허용
+        spring.json.trusted.packages: "*"
 
 services:
   location-service:
