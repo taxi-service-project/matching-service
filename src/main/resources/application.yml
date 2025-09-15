@@ -12,3 +12,9 @@ spring:
   h2:
     console:
       enabled: true
+
+services:
+  location-service:
+    url: http://localhost:8081 # 위치 정보 서비스 주소
+  driver-service:
+    url: http://localhost:8082 # 기사 서비스 주소
