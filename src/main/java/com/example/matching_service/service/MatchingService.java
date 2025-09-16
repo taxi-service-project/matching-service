@@ -1,6 +1,5 @@
 package com.example.matching_service.service;
 
-import com.example.matching_service.client.DriverServiceClient;
 import com.example.matching_service.client.LocationServiceClient;
 import com.example.matching_service.dto.MatchRequest;
 import com.example.matching_service.dto.MatchResponse;
@@ -14,10 +13,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Map;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -25,11 +21,10 @@ import java.util.stream.Collectors;
 public class MatchingService {
 
     private final LocationServiceClient locationServiceClient;
-    private final DriverServiceClient driverServiceClient;
     private final RedisTemplate<String, String> redisTemplate;
     private final MatchingKafkaProducer kafkaProducer;
 
-    private record DriverCandidate(Long driverId, double distance, double ratingAvg) {}
+    private record DriverCandidate(Long driverId, double distance) {}
 
     public MatchResponse requestMatch(MatchRequest request) {
         String matchRequestId = UUID.randomUUID().toString();
@@ -62,34 +57,10 @@ public class MatchingService {
         return locationServiceClient.findNearbyDrivers(
                                             request.origin().longitude(), request.origin().latitude(), 5)
                                     .filterWhen(this::isDriverAvailable)
-                                    .collectList()
-                                    .flatMap(nearbyDrivers -> {
-                                        if (nearbyDrivers.isEmpty()) {
-                                            return Mono.empty();
-                                        }
-
-                                        // 1. 빠른 조회를 위해 List를 Map으로 변환 (조회 성능 O(N) -> O(1))
-                                        Map<Long, Double> distanceMap = nearbyDrivers.stream()
-                                                                                     .collect(Collectors.toMap(
-                                                                                             LocationServiceClient.NearbyDriver::driverId,
-                                                                                             LocationServiceClient.NearbyDriver::distance
-                                                                                     ));
-
-                                        List<Long> driverIds = nearbyDrivers.stream().map(LocationServiceClient.NearbyDriver::driverId).toList();
-
-                                        // 2. 기사 상세 정보 조회 후, 최고점 후보 1명만 찾는 reduce 사용
-                                        return driverServiceClient.getDriversInfo(driverIds)
-                                                                  .map(driverInfo -> {
-                                                                      double distance = distanceMap.getOrDefault(driverInfo.id(), Double.MAX_VALUE);
-                                                                      return new DriverCandidate(driverInfo.id(), distance, driverInfo.ratingAvg());
-                                                                  })
-                                                                  // 3. 전체 정렬 대신, 최고점 후보만 갱신하며 최종 1명을 찾음 (메모리 효율적)
-                                                                  .reduce((candidate1, candidate2) ->
-                                                                          calculateScore(candidate1.distance, candidate1.ratingAvg) >
-                                                                                  calculateScore(candidate2.distance, candidate2.ratingAvg)
-                                                                                  ? candidate1 : candidate2
-                                                                  );
-                                    });
+                                    .reduce((driver1, driver2) ->
+                                            driver1.distance() < driver2.distance() ? driver1 : driver2
+                                    )
+                                    .map(nearbyDriver -> new DriverCandidate(nearbyDriver.driverId(), nearbyDriver.distance()));
     }
 
     private Mono<Boolean> isDriverAvailable(LocationServiceClient.NearbyDriver driver) {
@@ -100,11 +71,4 @@ public class MatchingService {
         }).subscribeOn(Schedulers.boundedElastic());
     }
 
-    private double calculateScore(double distanceKm, double rating) {
-        final double MIN_DISTANCE_KM = 0.01;
-
-        double effectiveDistance = Math.max(distanceKm, MIN_DISTANCE_KM);
-
-        return (1.0 / effectiveDistance) * 100 + (rating * 10);
-    }
 }
