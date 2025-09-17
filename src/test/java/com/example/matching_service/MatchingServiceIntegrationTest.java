@@ -56,13 +56,17 @@ class MatchingServiceIntegrationTest {
     @DisplayName("실제 Redis와 연동하여 가장 가까운 기사가 매칭되고 Kafka 이벤트가 발행되어야 한다")
     void requestMatch_WithRealRedis_ShouldMatchClosestDriver() {
         // given
-        MatchRequest request = new MatchRequest(1L, new MatchRequest.Location(127.0, 37.5), null);
+        String userId = "a1b2c3d4-user-uuid";
+        String driverIdA = "a1b2c3d4-driverA-uuid";
+        String driverIdC = "a1b2c3d4-driverC-uuid";
 
-        redisTemplate.opsForHash().put("driver_status:101", "isAvailable", "1");
-        redisTemplate.opsForHash().put("driver_status:103", "isAvailable", "1");
+        MatchRequest request = new MatchRequest(userId, new MatchRequest.Location(127.0, 37.5), null);
 
-        var driverA = new LocationServiceClient.NearbyDriver(101L, 100.0); // 100m (더 가까움)
-        var driverC = new LocationServiceClient.NearbyDriver(103L, 300.0); // 300m
+        redisTemplate.opsForHash().put("driver_status:" + driverIdA, "isAvailable", "1");
+        redisTemplate.opsForHash().put("driver_status:" + driverIdC, "isAvailable", "1");
+
+        var driverA = new LocationServiceClient.NearbyDriver(driverIdA, 100.0);
+        var driverC = new LocationServiceClient.NearbyDriver(driverIdC, 300.0);
         when(locationServiceClient.findNearbyDrivers(anyDouble(), anyDouble(), anyInt())).thenReturn(Flux.just(driverA, driverC));
 
         // when
@@ -73,6 +77,8 @@ class MatchingServiceIntegrationTest {
         verify(kafkaProducer, timeout(2000)).sendTripMatchedEvent(eventCaptor.capture());
 
         TripMatchedEvent capturedEvent = eventCaptor.getValue();
-        assertThat(capturedEvent.driverId()).isEqualTo(101L);
+
+        assertThat(capturedEvent.driverId()).isEqualTo(driverIdA);
+        assertThat(capturedEvent.userId()).isEqualTo(userId);
     }
 }

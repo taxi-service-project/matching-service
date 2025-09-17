@@ -24,7 +24,7 @@ public class MatchingService {
     private final RedisTemplate<String, String> redisTemplate;
     private final MatchingKafkaProducer kafkaProducer;
 
-    private record DriverCandidate(Long driverId, double distance) {}
+    private record DriverCandidate(String driverId, double distance) {}
 
     public MatchResponse requestMatch(MatchRequest request) {
         String matchRequestId = UUID.randomUUID().toString();

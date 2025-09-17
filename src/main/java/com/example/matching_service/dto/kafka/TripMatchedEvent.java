@@ -5,8 +5,8 @@ import java.time.LocalDateTime;
 
 public record TripMatchedEvent(
         String tripId,
-        Long userId,
-        Long driverId,
+        String userId,
+        String driverId,
         MatchRequest.Location origin,
         MatchRequest.Location destination,
         LocalDateTime matchedAt

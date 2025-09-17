@@ -11,7 +11,7 @@ import reactor.core.publisher.Flux;
 public class LocationServiceClient {
     private final WebClient webClient;
 
-    public record NearbyDriver(Long driverId, Double distance) {}
+    public record NearbyDriver(String driverId, Double distance) {}
 
     public LocationServiceClient(WebClient.Builder builder,
                                  @Value("${services.location-service.url}") String serviceUrl) {
