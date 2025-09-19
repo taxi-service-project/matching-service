@@ -22,16 +22,11 @@ spring:
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       properties:
-        linger.ms: 5
-        batch.size: 30000
-        buffer.memory: 30000000
-    consumer:
-      group-id: matching-service-group
-      auto-offset-reset: earliest
-      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
-      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-      properties:
-        spring.json.trusted.packages: "*"
+        enable.idempotence: true
+        linger.ms: 50 # 메시지를 모아서 보내는 시간
+        batch.size: 131072 # 128KB
+        buffer.memory: 33554432 # 32MB
+        request.timeout.ms: 30000
 
 services:
   location-service:
