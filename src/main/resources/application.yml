@@ -31,7 +31,6 @@ spring:
       value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       properties:
-        # 4. JsonDeserializer가 모든 패키지의 객체를 변환할 수 있도록 허용
         spring.json.trusted.packages: "*"
 
 services:
