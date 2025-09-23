@@ -54,8 +54,15 @@ public class MatchingService {
     }
 
     private Mono<DriverCandidate> findBestDriver(MatchRequest request) {
+        return findBestDriverInRadius(request, 1)
+                .switchIfEmpty(findBestDriverInRadius(request, 2))
+                .switchIfEmpty(findBestDriverInRadius(request, 3));
+    }
+
+    private Mono<DriverCandidate> findBestDriverInRadius(MatchRequest request, int radiusKm) {
+        log.info("{}km 반경 내에서 기사 검색을 시작합니다.", radiusKm);
         return locationServiceClient.findNearbyDrivers(
-                                            request.origin().longitude(), request.origin().latitude(), 5)
+                                            request.origin().longitude(), request.origin().latitude(), radiusKm)
                                     .filterWhen(this::isDriverAvailable)
                                     .reduce((driver1, driver2) ->
                                             driver1.distance() < driver2.distance() ? driver1 : driver2
@@ -70,5 +77,4 @@ public class MatchingService {
             return "1".equals(value);
         }).subscribeOn(Schedulers.boundedElastic());
     }
-
 }
