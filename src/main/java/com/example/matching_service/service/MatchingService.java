@@ -7,7 +7,7 @@ import com.example.matching_service.dto.kafka.TripMatchedEvent;
 import com.example.matching_service.kafka.MatchingKafkaProducer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -21,7 +21,7 @@ import java.util.UUID;
 public class MatchingService {
 
     private final LocationServiceClient locationServiceClient;
-    private final RedisTemplate<String, String> redisTemplate;
+    private final ReactiveRedisTemplate<String, String> reactiveRedisTemplate;
     private final MatchingKafkaProducer kafkaProducer;
 
     private record DriverCandidate(String driverId, double distance) {}
@@ -38,43 +38,48 @@ public class MatchingService {
 
     private void processMatchingAsync(MatchRequest request, String tripId) {
         findBestDriver(request)
+                .flatMap(bestDriver -> {
+                    TripMatchedEvent event = new TripMatchedEvent(
+                            tripId, request.userId(), bestDriver.driverId(),
+                            request.origin(), request.destination(), LocalDateTime.now()
+                    );
+                    return kafkaProducer.sendTripMatchedEvent(event)
+                                        .doOnSuccess(v -> log.info("최적 기사 선정 및 이벤트 발행 최종 완료. Trip ID: {}", tripId))
+                                        .then();
+                })
                 .subscribeOn(Schedulers.boundedElastic())
                 .subscribe(
-                        bestDriver -> {
-                            log.info("최적 기사 선정 완료. Trip ID: {}, Driver ID: {}", tripId, bestDriver.driverId());
-                            TripMatchedEvent event = new TripMatchedEvent(
-                                    tripId, request.userId(), bestDriver.driverId(),
-                                    request.origin(), request.destination(), LocalDateTime.now()
-                            );
-                            kafkaProducer.sendTripMatchedEvent(event);
-                        },
-                        error -> log.error("매칭 처리 중 오류 발생. Trip ID: {}", tripId, error),
-                        () -> log.info("주변에 호출 가능한 기사가 없어 매칭에 실패했습니다. Trip ID: {}", tripId)
+                        null,
+                        error -> log.error("❌ 매칭 비동기 처리 중 치명적 오류. Trip ID: {}", tripId, error),
+                        () -> log.info("매칭 프로세스 종료. Trip ID: {}", tripId)
                 );
     }
 
     private Mono<DriverCandidate> findBestDriver(MatchRequest request) {
+        // 1km -> 2km -> 3km 순차 확장 검색
         return findBestDriverInRadius(request, 1)
                 .switchIfEmpty(findBestDriverInRadius(request, 2))
-                .switchIfEmpty(findBestDriverInRadius(request, 3));
+                .switchIfEmpty(findBestDriverInRadius(request, 3))
+                // 3km까지 다 뒤져도 없으면?
+                .doOnSuccess(candidate -> {
+                    if (candidate == null) log.info("반경 3km 내 배차 가능 기사 없음.");
+                });
     }
 
     private Mono<DriverCandidate> findBestDriverInRadius(MatchRequest request, int radiusKm) {
-        log.info("{}km 반경 내에서 기사 검색을 시작합니다.", radiusKm);
         return locationServiceClient.findNearbyDrivers(
                                             request.origin().longitude(), request.origin().latitude(), radiusKm)
                                     .filterWhen(this::isDriverAvailable)
                                     .reduce((driver1, driver2) ->
                                             driver1.distance() < driver2.distance() ? driver1 : driver2
                                     )
-                                    .map(nearbyDriver -> new DriverCandidate(nearbyDriver.driverId(), nearbyDriver.distance()));
+                                    .map(d -> new DriverCandidate(d.driverId(), d.distance()));
     }
 
     private Mono<Boolean> isDriverAvailable(LocationServiceClient.NearbyDriver driver) {
-        return Mono.fromCallable(() -> {
-            String key = "driver_status:" + driver.driverId();
-            String value = (String) redisTemplate.opsForHash().get(key, "isAvailable");
-            return "1".equals(value);
-        }).subscribeOn(Schedulers.boundedElastic());
+        String key = "driver_status:" + driver.driverId();
+        return reactiveRedisTemplate.opsForHash().get(key, "isAvailable")
+                                    .map(value -> "1".equals(value))
+                                    .defaultIfEmpty(false); // 값이 없으면 불가능으로 처리
     }
 }
