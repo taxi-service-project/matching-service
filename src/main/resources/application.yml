@@ -5,17 +5,17 @@ spring:
   application:
     name: matching-service
   datasource:
-    url: jdbc:h2:mem:testdb
-    driverClassName: org.h2.Driver
-    username: sa
+    url:
+    driverClassName:
+    username:
     password: 
-  h2:
-    console:
-      enabled: true
+  jpa:
+    hibernate:
+      ddl-auto: update
   data:
     redis:
-      host: localhost
-      port: 6379
+      host:
+      port:
   kafka:
     bootstrap-servers: 192.168.1.100:9092
     producer:
@@ -30,7 +30,7 @@ spring:
 
 services:
   location-service:
-    url: http://localhost:8080/geospatial
+    url: http://geospatial-service
 
 eureka:
   client:
