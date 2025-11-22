@@ -70,9 +70,7 @@ public class MatchingService {
         return locationServiceClient.findNearbyDrivers(
                                             request.origin().longitude(), request.origin().latitude(), radiusKm)
                                     .filterWhen(this::isDriverAvailable)
-                                    .reduce((driver1, driver2) ->
-                                            driver1.distance() < driver2.distance() ? driver1 : driver2
-                                    )
+                                    .next()
                                     .map(d -> new DriverCandidate(d.driverId(), d.distance()));
     }
 
