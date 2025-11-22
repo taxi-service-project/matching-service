@@ -38,6 +38,11 @@ resilience4j:
         sliding-window-size: 20
         wait-duration-in-open-state: 30s
         permitted-number-of-calls-in-half-open-state: 5
+  timelimiter:
+    instances:
+      geospatial-service:
+        timeout-duration: 3s
+        cancel-running-future: true
 
 services:
   location-service:
