@@ -4,7 +4,6 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 
 public record MatchRequest(
-        @NotNull String userId,
         @NotNull @Valid Location origin,
         @NotNull @Valid Location destination
 ) {

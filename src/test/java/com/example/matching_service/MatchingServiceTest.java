@@ -12,12 +12,13 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.redis.core.HashOperations;
-import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.ReactiveHashOperations;
+import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -28,58 +29,69 @@ class MatchingServiceTest {
 
     @Mock
     private LocationServiceClient locationServiceClient;
+
     @Mock
-    private RedisTemplate<String, String> redisTemplate;
+    private ReactiveRedisTemplate<String, String> reactiveRedisTemplate;
+
+    @Mock
+    private ReactiveHashOperations<String, Object, Object> reactiveHashOperations;
+
     @Mock
     private MatchingKafkaProducer kafkaProducer;
-    @Mock
-    private HashOperations<String, Object, Object> hashOperations;
-
 
     @Test
     @DisplayName("매칭 성공 시 가장 가까운 기사에 대한 Kafka 이벤트가 발행되어야 한다")
     void requestMatch_Success_ShouldSendKafkaEventForClosestDriver() {
         // given:
-        String userId = "a1b2c3d4-e5f6-7890-1234-567890user";
-        String driverIdA = "a1b2c3d4-e5f6-7890-1234-567890drvA";
-        String driverIdC = "a1b2c3d4-e5f6-7890-1234-567890drvC";
+        String userId = "user-uuid-123";
+        String driverIdA = "driver-uuid-A";
+        String driverIdC = "driver-uuid-C";
 
-        MatchRequest request = new MatchRequest(userId, new MatchRequest.Location(127.0, 37.5), null);
+        MatchRequest request = new MatchRequest(
+                new MatchRequest.Location(127.0, 37.5),
+                new MatchRequest.Location(127.1, 37.6)
+        );
 
-        var driverA = new LocationServiceClient.NearbyDriver(driverIdA, 100.0); // 100m (더 가까움)
+        var driverA = new LocationServiceClient.NearbyDriver(driverIdA, 100.0); // 100m
         var driverC = new LocationServiceClient.NearbyDriver(driverIdC, 300.0); // 300m
 
-        when(locationServiceClient.findNearbyDrivers(anyDouble(), anyDouble(), anyInt())).thenReturn(Flux.just(driverA, driverC));
-
-        when(redisTemplate.opsForHash()).thenReturn(hashOperations);
-        when(hashOperations.get("driver_status:" + driverIdA, "isAvailable")).thenReturn("1");
-        when(hashOperations.get("driver_status:" + driverIdC, "isAvailable")).thenReturn("1");
+        when(locationServiceClient.findNearbyDrivers(anyDouble(), anyDouble(), anyInt()))
+                .thenReturn(Flux.just(driverA, driverC));
+        when(reactiveRedisTemplate.opsForHash()).thenReturn(reactiveHashOperations);
+        when(reactiveHashOperations.get("driver_status:" + driverIdA, "isAvailable"))
+                .thenReturn(Mono.just("1"));
+        when(kafkaProducer.sendTripMatchedEvent(any(TripMatchedEvent.class)))
+                .thenReturn(Mono.empty());
 
         // when
-        matchingService.requestMatch(request);
+        matchingService.requestMatch(userId, request);
 
         // then
         ArgumentCaptor<TripMatchedEvent> eventCaptor = ArgumentCaptor.forClass(TripMatchedEvent.class);
-        verify(kafkaProducer, timeout(1000)).sendTripMatchedEvent(eventCaptor.capture());
+        verify(kafkaProducer, timeout(2000)).sendTripMatchedEvent(eventCaptor.capture());
 
         TripMatchedEvent capturedEvent = eventCaptor.getValue();
-
         assertThat(capturedEvent.userId()).isEqualTo(userId);
-        assertThat(capturedEvent.driverId()).isEqualTo(driverIdA); // 가장 가까운 기사는 A
+        assertThat(capturedEvent.driverId()).isEqualTo(driverIdA); // 100m 기사가 선택됨
     }
 
     @Test
     @DisplayName("주변에 기사가 한 명도 없는 경우 Kafka 이벤트가 발행되지 않아야 한다")
     void requestMatch_Fail_WhenNoNearbyDrivers() {
         // given
-        MatchRequest request = new MatchRequest("1L", new MatchRequest.Location(127.0, 37.5), null);
+        String userId = "user-uuid-123";
+        MatchRequest request = new MatchRequest(
+                new MatchRequest.Location(127.0, 37.5),
+                new MatchRequest.Location(127.1, 37.6)
+        );
+
         when(locationServiceClient.findNearbyDrivers(anyDouble(), anyDouble(), anyInt()))
-                .thenReturn(Flux.empty());
+                .thenReturn(Flux.empty()); // 기사 없음
 
         // when
-        matchingService.requestMatch(request);
+        matchingService.requestMatch(userId, request);
 
-        // then: Kafka Producer가 절대 호출되지 않았는지 검증
+        // then
         verify(kafkaProducer, after(1000).never()).sendTripMatchedEvent(any());
     }
 
@@ -87,16 +99,24 @@ class MatchingServiceTest {
     @DisplayName("주변 기사가 모두 운행 불가능 상태일 경우 Kafka 이벤트가 발행되지 않아야 한다")
     void requestMatch_Fail_WhenAllDriversAreNotAvailable() {
         // given
-        MatchRequest request = new MatchRequest("1L", new MatchRequest.Location(127.0, 37.5), null);
-        var driverA = new LocationServiceClient.NearbyDriver("101L", 100.0);
+        String userId = "user-uuid-123";
+        MatchRequest request = new MatchRequest(
+                new MatchRequest.Location(127.0, 37.5),
+                new MatchRequest.Location(127.1, 37.6)
+        );
+
+        var driverA = new LocationServiceClient.NearbyDriver("driver-A", 100.0);
+
         when(locationServiceClient.findNearbyDrivers(anyDouble(), anyDouble(), anyInt()))
                 .thenReturn(Flux.just(driverA));
 
-        when(redisTemplate.opsForHash()).thenReturn(hashOperations);
-        when(hashOperations.get(anyString(), anyString())).thenReturn("0"); // 모두 '운행 불가능'
+        when(reactiveRedisTemplate.opsForHash()).thenReturn(reactiveHashOperations);
+
+        when(reactiveHashOperations.get(anyString(), anyString()))
+                .thenReturn(Mono.just("0"));
 
         // when
-        matchingService.requestMatch(request);
+        matchingService.requestMatch(userId, request);
 
         // then
         verify(kafkaProducer, after(1000).never()).sendTripMatchedEvent(any());

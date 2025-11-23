@@ -6,10 +6,7 @@ import com.example.matching_service.service.MatchingService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import static org.springframework.http.HttpStatus.ACCEPTED;
 
@@ -21,8 +18,9 @@ public class MatchingController {
     private final MatchingService matchingService;
 
     @PostMapping
-    public ResponseEntity<MatchResponse> requestMatch(@Valid @RequestBody MatchRequest request) {
-        MatchResponse response = matchingService.requestMatch(request);
+    public ResponseEntity<MatchResponse> requestMatch(@Valid @RequestBody MatchRequest request,
+                                                      @RequestHeader(value = "X-User-Id") String authenticatedUserId) {
+        MatchResponse response = matchingService.requestMatch(authenticatedUserId, request);
         return new ResponseEntity<>(response, ACCEPTED);
     }
 }

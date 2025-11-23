@@ -26,21 +26,21 @@ public class MatchingService {
 
     private record DriverCandidate(String driverId, double distance) {}
 
-    public MatchResponse requestMatch(MatchRequest request) {
+    public MatchResponse requestMatch(String userId, MatchRequest request) {
         String matchRequestId = UUID.randomUUID().toString();
         String tripId = UUID.randomUUID().toString();
         log.info("매칭 요청 접수. Request ID: {}, Trip ID: {}", matchRequestId, tripId);
 
-        processMatchingAsync(request, tripId);
+        processMatchingAsync(request, tripId, userId);
 
         return new MatchResponse("주변 기사를 검색중입니다.", matchRequestId);
     }
 
-    private void processMatchingAsync(MatchRequest request, String tripId) {
+    private void processMatchingAsync(MatchRequest request, String tripId, String userId) {
         findBestDriver(request)
                 .flatMap(bestDriver -> {
                     TripMatchedEvent event = new TripMatchedEvent(
-                            tripId, request.userId(), bestDriver.driverId(),
+                            tripId, userId, bestDriver.driverId(),
                             request.origin(), request.destination(), LocalDateTime.now()
                     );
                     return kafkaProducer.sendTripMatchedEvent(event)
