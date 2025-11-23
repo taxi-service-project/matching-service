@@ -21,7 +21,7 @@ import java.util.UUID;
 public class MatchingService {
 
     private final LocationServiceClient locationServiceClient;
-    private final ReactiveRedisTemplate<String, String> reactiveRedisTemplate;
+    private final ReactiveRedisTemplate<String, String> reactiveRedisTemplate; // 영속화용 레디스
     private final MatchingKafkaProducer kafkaProducer;
 
     private record DriverCandidate(String driverId, double distance) {}
@@ -39,12 +39,17 @@ public class MatchingService {
     private void processMatchingAsync(MatchRequest request, String tripId, String userId) {
         findBestDriver(request)
                 .flatMap(bestDriver -> {
+                    String key = "driver_status:" + bestDriver.driverId();
+                    return reactiveRedisTemplate.opsForHash().put(key, "isAvailable", "0")
+                                                .then(Mono.just(bestDriver));
+                })
+                .flatMap(bestDriver -> {
                     TripMatchedEvent event = new TripMatchedEvent(
                             tripId, userId, bestDriver.driverId(),
                             request.origin(), request.destination(), LocalDateTime.now()
                     );
                     return kafkaProducer.sendTripMatchedEvent(event)
-                                        .doOnSuccess(v -> log.info("최적 기사 선정 및 이벤트 발행 최종 완료. Trip ID: {}", tripId))
+                                        .doOnSuccess(v -> log.info("최적 기사 선정 완료. Trip ID: {}", tripId))
                                         .then();
                 })
                 .subscribeOn(Schedulers.boundedElastic())
@@ -53,6 +58,14 @@ public class MatchingService {
                         error -> log.error("❌ 매칭 비동기 처리 중 치명적 오류. Trip ID: {}", tripId, error),
                         () -> log.info("매칭 프로세스 종료. Trip ID: {}", tripId)
                 );
+    }
+
+    public Mono<Boolean> releaseDriver(String driverId) {
+        String key = "driver_status:" + driverId;
+
+        return reactiveRedisTemplate.opsForHash().put(key, "isAvailable", "1")
+                                    .doOnSuccess(v -> log.info("기사 상태 복구 완료: {}", driverId))
+                                    .doOnError(e -> log.error("기사 상태 복구 실패: {}", driverId, e));
     }
 
     private Mono<DriverCandidate> findBestDriver(MatchRequest request) {
