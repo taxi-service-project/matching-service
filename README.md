@@ -20,3 +20,11 @@
 * **Latency 최적화:** Redis Geo 조회 시 `limit(50)`과 `.next()`(단락 평가)를 적용하여 검색 속도 향상.
 * **Concurrency Control:** 기사 배정 즉시 Redis 상태를 `Busy(0)`로 선점하여 중복 배차 방지.
 * **Reactive Pipeline:** `ReactiveRedisTemplate` 기반의 완전한 Non-blocking 처리.
+
+
+
+
+----------
+
+## 아키텍쳐
+<img width="2324" height="1686" alt="Image" src="https://github.com/user-attachments/assets/81a25ff9-ee02-4996-80d3-f9217c3b7750" />
