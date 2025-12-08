@@ -51,13 +51,13 @@ resilience4j:
         failure-rate-threshold: 50
         minimum-number-of-calls: 10
         sliding-window-type: count-based
-        sliding-window-size: 20
+        sliding-window-size: 100
         wait-duration-in-open-state: 30s
         permitted-number-of-calls-in-half-open-state: 5
   timelimiter:
     instances:
       geospatial-service:
-        timeout-duration: 3s
+        timeout-duration: 1s
         cancel-running-future: true
 
 services:
