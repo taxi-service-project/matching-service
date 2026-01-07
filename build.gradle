@@ -59,6 +59,9 @@ dependencies {
 	testImplementation 'org.testcontainers:junit-jupiter'
 
 	implementation 'org.springframework.cloud:spring-cloud-starter-netflix-eureka-client'
+
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
+	implementation 'io.micrometer:micrometer-tracing-bridge-brave'
 }
 
 tasks.named('test') {
