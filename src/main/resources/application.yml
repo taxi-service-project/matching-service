@@ -43,6 +43,9 @@ spring:
           com.example.trip_service.kafka.dto.TripCanceledEvent:com.example.matching_service.dto.kafka.TripCanceledEvent
     listener:
       ack-mode: RECORD
+      observation-enabled: true
+    template:
+      observation-enabled: true
 
 resilience4j:
   circuitbreaker:
