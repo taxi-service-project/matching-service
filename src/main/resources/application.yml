@@ -41,9 +41,7 @@ spring:
         spring.json.type.mapping: >
           com.example.trip_service.kafka.dto.TripCompletedEvent:com.example.matching_service.dto.kafka.TripCompletedEvent,
           com.example.trip_service.kafka.dto.TripCanceledEvent:com.example.matching_service.dto.kafka.TripCanceledEvent
-    listener:
-      ack-mode: RECORD
-      observation-enabled: true
+
     template:
       observation-enabled: true
 
