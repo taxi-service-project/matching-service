@@ -49,7 +49,13 @@ public class MatchingService {
                             request.origin(), request.destination(), LocalDateTime.now()
                     );
                     return kafkaProducer.sendTripMatchedEvent(event)
-                                        .doOnSuccess(v -> log.info("최적 기사 선정 완료. Trip ID: {}", tripId))
+                                        .doOnSuccess(v -> log.info("✅ 최적 기사 선정 및 Kafka 발행 완료. Trip ID: {}, Driver ID: {}", tripId, bestDriver.driverId()))
+                                        .onErrorResume(error -> {
+                                            log.error("❌ Kafka 전송 실패. 기사 상태 복구(Rollback) 시작. Driver ID: {}", bestDriver.driverId(), error);
+                                            return releaseDriver(bestDriver.driverId())
+                                                     .then(releaseLock(bestDriver.driverId()))
+                                                     .then(Mono.error(error));
+                                        })
                                         .then();
                 })
                 .subscribeOn(Schedulers.boundedElastic())
@@ -82,15 +88,42 @@ public class MatchingService {
     private Mono<DriverCandidate> findBestDriverInRadius(MatchRequest request, int radiusKm) {
         return locationServiceClient.findNearbyDrivers(
                                             request.origin().longitude(), request.origin().latitude(), radiusKm)
-                                    .filterWhen(this::isDriverAvailable)
+                                    .filterWhen(this::tryLockAndVerifyDriver)
                                     .next()
                                     .map(d -> new DriverCandidate(d.driverId(), d.distance()));
+    }
+
+    private Mono<Boolean> releaseLock(String driverId) {
+        String lockKey = "matching_lock:" + driverId;
+        return reactiveRedisTemplate.opsForValue().delete(lockKey);
+    }
+
+    private Mono<Boolean> tryLockAndVerifyDriver(LocationServiceClient.NearbyDriver driver) {
+        String lockKey = "matching_lock:" + driver.driverId();
+
+        // 우선 락 획득 시도 (동시성 방어)
+        return reactiveRedisTemplate.opsForValue()
+                                    .setIfAbsent(lockKey, "LOCKED", java.time.Duration.ofSeconds(10))
+                                    .flatMap(locked -> {
+                                        if (!locked) return Mono.just(false); // 락 획득 실패 시 즉시 탈락
+
+                                        // 락 획득 성공 시, 실제 기사 상태가 '1(가능)'인지 확인 (영속성 확인)
+                                        return isDriverAvailable(driver)
+                                                .flatMap(available -> {
+                                                    if (available) {
+                                                        return Mono.just(true); // 상태도 '1'이면 최종 통과
+                                                    } else {
+                                                        // 락은 잡았지만 상태가 '0'이면, 락을 다시 풀어주고 탈락 처리
+                                                        return releaseLock(driver.driverId()).thenReturn(false);
+                                                    }
+                                                });
+                                    });
     }
 
     private Mono<Boolean> isDriverAvailable(LocationServiceClient.NearbyDriver driver) {
         String key = "driver_status:" + driver.driverId();
         return reactiveRedisTemplate.opsForHash().get(key, "isAvailable")
                                     .map(value -> "1".equals(value))
-                                    .defaultIfEmpty(false); // 값이 없으면 불가능으로 처리
+                                    .defaultIfEmpty(false);
     }
 }
