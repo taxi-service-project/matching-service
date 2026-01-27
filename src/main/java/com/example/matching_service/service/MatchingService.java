@@ -4,7 +4,10 @@ import com.example.matching_service.client.LocationServiceClient;
 import com.example.matching_service.dto.MatchRequest;
 import com.example.matching_service.dto.MatchResponse;
 import com.example.matching_service.dto.kafka.TripMatchedEvent;
-import com.example.matching_service.kafka.MatchingKafkaProducer;
+import com.example.matching_service.entity.MatchingOutbox;
+import com.example.matching_service.repository.MatchingOutboxRepository;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
@@ -22,18 +25,17 @@ public class MatchingService {
 
     private final LocationServiceClient locationServiceClient;
     private final ReactiveRedisTemplate<String, String> reactiveRedisTemplate; // 영속화용 레디스
-    private final MatchingKafkaProducer kafkaProducer;
+    private final MatchingOutboxRepository outboxRepository;
+    private final ObjectMapper objectMapper;
 
     private record DriverCandidate(String driverId, double distance) {}
 
-    public MatchResponse requestMatch(String userId, MatchRequest request) {
+    public Mono<MatchResponse> requestMatch(String userId, MatchRequest request) {
         String matchRequestId = UUID.randomUUID().toString();
         String tripId = UUID.randomUUID().toString();
         log.info("매칭 요청 접수. Request ID: {}, Trip ID: {}", matchRequestId, tripId);
 
-        processMatchingAsync(request, tripId, userId);
-
-        return new MatchResponse("주변 기사를 검색중입니다.", matchRequestId);
+        return processMatchingLogic(request, tripId, userId, matchRequestId);
     }
 
     public Mono<Boolean> releaseDriver(String driverId) {
@@ -44,8 +46,9 @@ public class MatchingService {
                                     .doOnError(e -> log.error("기사 상태 복구 실패: {}", driverId, e));
     }
 
-    private void processMatchingAsync(MatchRequest request, String tripId, String userId) {
-        findBestDriver(request)
+    private Mono<MatchResponse> processMatchingLogic(MatchRequest request, String tripId, String userId, String requestId) {
+        return findBestDriver(request)
+                .switchIfEmpty(Mono.error(new RuntimeException("배차 가능한 기사가 없습니다.")))
                 .flatMap(bestDriver -> {
                     String key = "driver_status:" + bestDriver.driverId();
                     return reactiveRedisTemplate.opsForHash().put(key, "isAvailable", "0")
@@ -56,22 +59,19 @@ public class MatchingService {
                             tripId, userId, bestDriver.driverId(),
                             request.origin(), request.destination(), LocalDateTime.now()
                     );
-                    return kafkaProducer.sendTripMatchedEvent(event)
-                                        .doOnSuccess(v -> log.info("✅ 최적 기사 선정 및 Kafka 발행 완료. Trip ID: {}, Driver ID: {}", tripId, bestDriver.driverId()))
-                                        .onErrorResume(error -> {
-                                            log.error("❌ Kafka 전송 실패. 기사 상태 복구(Rollback) 시작. Driver ID: {}", bestDriver.driverId(), error);
-                                            return releaseDriver(bestDriver.driverId())
-                                                    .then(releaseLock(bestDriver.driverId()))
-                                                    .then(Mono.error(error));
-                                        })
-                                        .then();
+
+                    return saveToOutbox(event)
+                            .map(v -> new MatchResponse("매칭 성공!", requestId))
+                            .onErrorResume(error -> {
+                                log.error("❌ Outbox 저장 실패. 롤백 시작. Driver ID: {}", bestDriver.driverId(), error);
+                                return releaseDriver(bestDriver.driverId())
+                                        .then(releaseLock(bestDriver.driverId()))
+                                        .then(Mono.error(error)); // 에러를 그대로 위로 던짐
+                            });
                 })
                 .subscribeOn(Schedulers.boundedElastic())
-                .subscribe(
-                        null,
-                        error -> log.error("❌ 매칭 비동기 처리 중 치명적 오류. Trip ID: {}", tripId, error),
-                        () -> log.info("매칭 프로세스 종료. Trip ID: {}", tripId)
-                );
+                .doOnSuccess(res -> log.info("매칭 프로세스 종료. Trip ID: {}", tripId))
+                .doOnError(err -> log.error("❌ 매칭 처리 중 치명적 오류. Trip ID: {}", tripId, err));
     }
 
     private Mono<DriverCandidate> findBestDriver(MatchRequest request) {
@@ -83,6 +83,23 @@ public class MatchingService {
                 .doOnSuccess(candidate -> {
                     if (candidate == null) log.info("반경 3km 내 배차 가능 기사 없음.");
                 });
+    }
+
+    private Mono<MatchingOutbox> saveToOutbox(TripMatchedEvent event) {
+        return Mono.fromCallable(() -> {
+            try {
+                String payload = objectMapper.writeValueAsString(event);
+                MatchingOutbox outbox = MatchingOutbox.builder()
+                                                      .aggregateId(event.tripId())
+                                                      .topic("matching_events")
+                                                      .payload(payload)
+                                                      .build();
+
+                return outboxRepository.save(outbox);
+            } catch (JsonProcessingException e) {
+                throw new RuntimeException("JSON 변환 실패", e);
+            }
+        }).subscribeOn(Schedulers.boundedElastic());
     }
 
     private Mono<DriverCandidate> findBestDriverInRadius(MatchRequest request, int radiusKm) {

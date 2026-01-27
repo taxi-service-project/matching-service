@@ -7,8 +7,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-
-import static org.springframework.http.HttpStatus.ACCEPTED;
+import reactor.core.publisher.Mono;
 
 @RestController
 @RequestMapping("/api/matches")
@@ -18,9 +17,10 @@ public class MatchingController {
     private final MatchingService matchingService;
 
     @PostMapping
-    public ResponseEntity<MatchResponse> requestMatch(@Valid @RequestBody MatchRequest request,
-                                                      @RequestHeader(value = "X-User-Id") String authenticatedUserId) {
-        MatchResponse response = matchingService.requestMatch(authenticatedUserId, request);
-        return new ResponseEntity<>(response, ACCEPTED);
+    public Mono<ResponseEntity<MatchResponse>> requestMatch(@Valid @RequestBody MatchRequest request,
+                                                            @RequestHeader(value = "X-User-Id") String authenticatedUserId) {
+
+        return matchingService.requestMatch(authenticatedUserId, request)
+                              .map(response -> ResponseEntity.ok(response));
     }
 }

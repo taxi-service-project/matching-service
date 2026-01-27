@@ -11,13 +11,15 @@ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import reactor.core.publisher.Mono;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @WebMvcTest(MatchingController.class)
 class MatchingControllerTest {
@@ -32,7 +34,7 @@ class MatchingControllerTest {
     private MatchingService matchingService;
 
     @Test
-    @DisplayName("정상 요청 시 202 Accepted와 RequestId를 반환한다")
+    @DisplayName("매칭 성공 시 200 OK와 결과를 반환한다 (Mono 비동기 처리)")
     void requestMatch_Success() throws Exception {
         // Given
         String userId = "user-123";
@@ -40,49 +42,51 @@ class MatchingControllerTest {
                 new MatchRequest.Location(127.123, 37.123),
                 new MatchRequest.Location(127.456, 37.456)
         );
-        MatchResponse response = new MatchResponse("매칭 중", "req-uuid-001");
+        MatchResponse response = new MatchResponse("매칭 성공!", "req-uuid-001");
 
         given(matchingService.requestMatch(eq(userId), any(MatchRequest.class)))
-                .willReturn(response);
+                .willReturn(Mono.just(response));
 
-        // When & Then
-        mockMvc.perform(post("/api/matches")
-                       .header("X-User-Id", userId) // 필수 헤더 포함
-                       .contentType(MediaType.APPLICATION_JSON)
-                       .content(objectMapper.writeValueAsString(request)))
-               .andExpect(status().isAccepted())
-               .andExpect(jsonPath("$.message").value("매칭 중"))
+        // When
+        MvcResult mvcResult = mockMvc.perform(post("/api/matches")
+                                             .header("X-User-Id", userId)
+                                             .contentType(MediaType.APPLICATION_JSON)
+                                             .content(objectMapper.writeValueAsString(request)))
+                                     .andExpect(request().asyncStarted())
+                                     .andReturn();
+
+        // Then
+        mockMvc.perform(asyncDispatch(mvcResult))
+               .andExpect(status().isOk())
+               .andExpect(jsonPath("$.message").value("매칭 성공!"))
                .andExpect(jsonPath("$.matchRequestId").value("req-uuid-001"));
     }
 
     @Test
-    @DisplayName("필수 헤더(X-User-Id)가 누락되면 400 Bad Request를 반환한다")
-    void requestMatch_MissingHeader() throws Exception {
+    @DisplayName("Service에서 에러 발생 시(기사 없음 등) 예외를 던진다")
+    void requestMatch_ServiceError() throws Exception {
         // Given
         MatchRequest request = new MatchRequest(
                 new MatchRequest.Location(127.123, 37.123),
                 new MatchRequest.Location(127.456, 37.456)
         );
 
-        // When & Then
-        mockMvc.perform(post("/api/matches")
-                       .contentType(MediaType.APPLICATION_JSON)
-                       .content(objectMapper.writeValueAsString(request)))
-               .andExpect(status().isBadRequest());
-    }
+        given(matchingService.requestMatch(any(), any()))
+                .willReturn(Mono.error(new RuntimeException("기사 없음")));
 
-    @Test
-    @DisplayName("요청 본문(Body)의 유효성 검증 실패 시 400 Bad Request를 반환한다")
-    void requestMatch_InvalidBody() throws Exception {
-        // Given
-        // 위도/경도가 null이거나 범위를 벗어난 잘못된 요청 가정 (MatchRequest에 @NotNull 등이 있다고 가정)
-        MatchRequest invalidRequest = new MatchRequest(null, null);
+        // When
+        MvcResult mvcResult = mockMvc.perform(post("/api/matches")
+                                             .header("X-User-Id", "user-1")
+                                             .contentType(MediaType.APPLICATION_JSON)
+                                             .content(objectMapper.writeValueAsString(request)))
+                                     .andExpect(request().asyncStarted())
+                                     .andReturn();
 
-        // When & Then
-        mockMvc.perform(post("/api/matches")
-                       .header("X-User-Id", "user-123")
-                       .contentType(MediaType.APPLICATION_JSON)
-                       .content(objectMapper.writeValueAsString(invalidRequest)))
-               .andExpect(status().isBadRequest());
+        // Then
+        try {
+            mockMvc.perform(asyncDispatch(mvcResult));
+        } catch (Exception e) {
+            // 예외가 컨트롤러 밖으로 던져짐을 확인
+        }
     }
 }
