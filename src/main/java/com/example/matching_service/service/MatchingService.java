@@ -36,6 +36,14 @@ public class MatchingService {
         return new MatchResponse("주변 기사를 검색중입니다.", matchRequestId);
     }
 
+    public Mono<Boolean> releaseDriver(String driverId) {
+        String key = "driver_status:" + driverId;
+
+        return reactiveRedisTemplate.opsForHash().put(key, "isAvailable", "1")
+                                    .doOnSuccess(v -> log.info("기사 상태 복구 완료: {}", driverId))
+                                    .doOnError(e -> log.error("기사 상태 복구 실패: {}", driverId, e));
+    }
+
     private void processMatchingAsync(MatchRequest request, String tripId, String userId) {
         findBestDriver(request)
                 .flatMap(bestDriver -> {
@@ -53,8 +61,8 @@ public class MatchingService {
                                         .onErrorResume(error -> {
                                             log.error("❌ Kafka 전송 실패. 기사 상태 복구(Rollback) 시작. Driver ID: {}", bestDriver.driverId(), error);
                                             return releaseDriver(bestDriver.driverId())
-                                                     .then(releaseLock(bestDriver.driverId()))
-                                                     .then(Mono.error(error));
+                                                    .then(releaseLock(bestDriver.driverId()))
+                                                    .then(Mono.error(error));
                                         })
                                         .then();
                 })
@@ -64,14 +72,6 @@ public class MatchingService {
                         error -> log.error("❌ 매칭 비동기 처리 중 치명적 오류. Trip ID: {}", tripId, error),
                         () -> log.info("매칭 프로세스 종료. Trip ID: {}", tripId)
                 );
-    }
-
-    public Mono<Boolean> releaseDriver(String driverId) {
-        String key = "driver_status:" + driverId;
-
-        return reactiveRedisTemplate.opsForHash().put(key, "isAvailable", "1")
-                                    .doOnSuccess(v -> log.info("기사 상태 복구 완료: {}", driverId))
-                                    .doOnError(e -> log.error("기사 상태 복구 실패: {}", driverId, e));
     }
 
     private Mono<DriverCandidate> findBestDriver(MatchRequest request) {
@@ -91,11 +91,6 @@ public class MatchingService {
                                     .filterWhen(this::tryLockAndVerifyDriver)
                                     .next()
                                     .map(d -> new DriverCandidate(d.driverId(), d.distance()));
-    }
-
-    private Mono<Boolean> releaseLock(String driverId) {
-        String lockKey = "matching_lock:" + driverId;
-        return reactiveRedisTemplate.opsForValue().delete(lockKey);
     }
 
     private Mono<Boolean> tryLockAndVerifyDriver(LocationServiceClient.NearbyDriver driver) {
@@ -118,6 +113,11 @@ public class MatchingService {
                                                     }
                                                 });
                                     });
+    }
+
+    private Mono<Boolean> releaseLock(String driverId) {
+        String lockKey = "matching_lock:" + driverId;
+        return reactiveRedisTemplate.opsForValue().delete(lockKey);
     }
 
     private Mono<Boolean> isDriverAvailable(LocationServiceClient.NearbyDriver driver) {

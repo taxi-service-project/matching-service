@@ -20,13 +20,13 @@ public class MatchingEventConsumer {
     @KafkaHandler
     public void handleTripCompleted(TripCompletedEvent event) {
         log.info("운행 종료 이벤트 수신. 기사({}) 상태를 '대기 중'으로 복구합니다.", event.driverId());
-        matchingService.releaseDriver(event.driverId()).subscribe();
+        matchingService.releaseDriver(event.driverId()).block();
     }
 
     @KafkaHandler
     public void handleTripCanceled(TripCanceledEvent event) {
         log.info("여정 취소 이벤트 수신. 기사({}) 상태를 '대기 중'으로 복구합니다.", event.driverId());
-        matchingService.releaseDriver(event.driverId()).subscribe();
+        matchingService.releaseDriver(event.driverId()).block();
     }
 
     @KafkaHandler(isDefault = true)
