@@ -4,6 +4,7 @@ import com.example.matching_service.client.TripServiceClient;
 import com.example.matching_service.service.MatchingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.data.redis.core.ScanOptions;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -21,17 +22,16 @@ public class DriverStatusScheduler {
 
     // 1분마다 실행
     @Scheduled(fixedDelay = 60000)
+    @SchedulerLock(name = "DriverStatusScheduler_syncDriverStatus", lockAtLeastFor = "PT30S", lockAtMostFor = "PT50S")
     public void syncDriverStatus() {
         log.info("🧹 [Scheduler] 기사 상태 정합성 검사 시작 (Zombie Cleaner)...");
 
-        // Redis SCAN: "driver_status:*" 키 조회
-        redisTemplate.scan(ScanOptions.scanOptions().match("driver_status:*").count(100).build())
+        redisTemplate.scan(ScanOptions.scanOptions().match("driver_status:*").count(1000).build())
                      .flatMap(key ->
                              redisTemplate.opsForHash().get(key, "isAvailable")
                                           .filter(status -> "0".equals(status)) // '0'(운행중)인 녀석들만 검사 대상
                                           .flatMap(status -> {
                                               String driverId = key.replace("driver_status:", "");
-                                              // 좀비 검사 및 복구 로직 실행
                                               return checkAndFixZombieDriver(driverId);
                                           })
                      )
