@@ -1,9 +1,12 @@
 server:
   port: 8083
+  shutdown: graceful
 
 spring:
   application:
     name: matching-service
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
   datasource:
     url:
     driverClassName:
