@@ -17,10 +17,10 @@ spring:
       ddl-auto: update
   data:
     redis:
-      host:
-      port:
+      host: ${SPRING_REDIS_HOST:localhost}
+      port: ${SPRING_REDIS_PORT:6379}
   kafka:
-    bootstrap-servers: 192.168.1.100:9092
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     producer:
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
@@ -76,21 +76,38 @@ resilience4j:
 
 services:
   location-service:
-    url: http://geospatial-service
+    url: "${GEOSPATIAL_SERVICE_URL:http://geospatial-service}"
   trip-service:
-    url: http://trip-service
+    url: "${TRIP_SERVICE_URL:http://trip-service}"
 
 eureka:
   client:
     register-with-eureka: true
     fetch-registry: true
     service-url:
-      defaultZone: http://localhost:8761/eureka
+      defaultZone: "${EUREKA_DEFAULT_ZONE:http://localhost:8761/eureka}"
 
 management:
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+
+  endpoints:
+    web:
+      exposure:
+        include: "health, prometheus"
+
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+
   tracing:
     sampling:
       probability: 1.0
     zipkin:
       tracing:
-        endpoint: "http://localhost:9411/api/v2/spans"
+        endpoint: "${ZIPKIN_ENDPOINT:http://localhost:9411/api/v2/spans}"
