@@ -2,16 +2,20 @@ package com.example.matching_service.config;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.dao.DataAccessException;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.ContainerProperties;
+import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.messaging.converter.MessageConversionException;
 import org.springframework.util.backoff.ExponentialBackOff;
 import org.springframework.util.backoff.FixedBackOff;
+import org.springframework.web.client.ResourceAccessException;
 
 @Configuration
 @Slf4j
@@ -22,22 +26,30 @@ public class KafkaConsumerConfig {
 
     @Bean
     public DefaultErrorHandler errorHandler() {
-        // 2초 뒤 재시도 -> 4초 -> 8초 ... (최대 30초 동안 시도)
-        ExponentialBackOff backOff = new ExponentialBackOff(2000L, 2.0);
-        backOff.setMaxElapsedTime(30000L); // 최대 30초까지만 버팀
 
-        DefaultErrorHandler errorHandler = new DefaultErrorHandler((record, exception) -> {
-            // [최후의 수단] 재시도 30초 다 했는데도 안 되면? 나중에 스케줄러가 처리
-            log.error("❌ Kafka 최종 실패 (재시도 초과). 스케줄러 보정 대상입니다. Topic: {}, Value: {}, Error: {}",
-                    record.topic(), record.value(), exception.getMessage());
-        }, backOff);
+        FixedBackOff backOff = new FixedBackOff(1000L, 3);
 
-        // 치명적인 코드 에러는 바로 포기 (재시도 X)
-        errorHandler.addNotRetryableExceptions(
-                MessageConversionException.class,
-                NullPointerException.class
+        DefaultErrorHandler errorHandler = new DefaultErrorHandler(backOff);
+
+        errorHandler.setRetryListeners((record, ex, attempt) ->
+                log.warn(
+                        "Kafka 레코드 재시도 시도 #{} → topic={} / partition={} / offset={} / error={}",
+                        attempt,
+                        record.topic(),
+                        record.partition(),
+                        record.offset(),
+                        ex.getMessage()
+                )
         );
 
+        // 재시도할 오류: 네트워크, DB 일시적 오류
+        errorHandler.addRetryableExceptions(ResourceAccessException.class, DataAccessException.class);
+
+        // 재시도하지 않을 오류: 데이터/코드 문제
+        errorHandler.addNotRetryableExceptions(
+                MessageConversionException.class, // JSON 파싱 실패
+                NullPointerException.class
+        );
         return errorHandler;
     }
 
