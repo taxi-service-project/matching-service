@@ -8,10 +8,10 @@ spring:
   lifecycle:
     timeout-per-shutdown-phase: 30s
   datasource:
-    url:
-    driverClassName:
-    username:
-    password: 
+    url: ${SPRING_DATASOURCE_URL}
+    driverClassName: com.mysql.cj.jdbc.Driver
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
   jpa:
     hibernate:
       ddl-auto: update
